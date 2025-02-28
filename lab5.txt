@@ -16,7 +16,7 @@ class LexicalAnalyzer
     static void Main()
     {
         // Prompt user for input
-        Console.WriteLine("Enter your code (press Enter twice to end input):");
+        Console.WriteLine("Enter your code :");
 
         string userInput = GetUserInput();
 
@@ -46,8 +46,8 @@ class LexicalAnalyzer
 
     static void LexicalAnalyzerFunction(string input)
     {
-        // Initialize symbol table
-        List<string[]> symbolTable = new List<string[]>();
+        // Initialize symbol table using a Dictionary (hash table)
+        Dictionary<string, string[]> symbolTable = new Dictionary<string, string[]>();
 
         // Split input into lines
         string[] lines = input.Split('\n');
@@ -103,11 +103,12 @@ class LexicalAnalyzer
         Console.WriteLine("\nSymbol Table:");
         foreach (var entry in symbolTable)
         {
-            Console.WriteLine($"Index: {entry[0]}, Name: {entry[1]}, Type: {entry[2]}, Value: {entry[3]}");
+            string[] symbolData = entry.Value;
+            Console.WriteLine($"Index: {symbolData[0]}, Name: {symbolData[1]}, Type: {symbolData[2]}, Value: {symbolData[3]}");
         }
     }
 
-    static void ProcessToken(string token, List<string> tokens, List<string[]> symbolTable)
+    static void ProcessToken(string token, List<string> tokens, Dictionary<string, string[]> symbolTable)
     {
         // Match the token with regex patterns
         if (keywordList.Contains(token))
@@ -119,10 +120,10 @@ class LexicalAnalyzer
             tokens.Add($"<var, {token}>");
 
             // Check if the variable is already in the symbol table
-            if (!symbolTable.Exists(entry => entry[1] == token))
+            if (!symbolTable.ContainsKey(token))
             {
                 // Assuming "int" as the default type for simplicity
-                symbolTable.Add(new string[] { symbolTable.Count.ToString(), token, "int", "Unknown" });
+                symbolTable.Add(token, new string[] { symbolTable.Count.ToString(), token, "int", "Unknown" });
             }
         }
         else if (constants_Reg.IsMatch(token))
@@ -133,9 +134,9 @@ class LexicalAnalyzer
             string type = token.Contains(".") ? "float" : "int";
 
             // Add constant to the symbol table (with proper type and value)
-            if (!symbolTable.Exists(entry => entry[1] == token))
+            if (!symbolTable.ContainsKey(token))
             {
-                symbolTable.Add(new string[] { symbolTable.Count.ToString(), token, type, token });
+                symbolTable.Add(token, new string[] { symbolTable.Count.ToString(), token, type, token });
             }
         }
         else if (operators_Reg.IsMatch(token))
