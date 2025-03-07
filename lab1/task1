@@ -1,0 +1,22 @@
+using System;
+using System.Text.RegularExpressions;
+
+class Program
+{
+    static bool IsValidPrond(string input)
+    {
+        string pattern = @"^(?=.*[A-Z])(?=(.*[a-z]){4,})(?=(.*\d){2})(?=(.*[\W]){2,}).{12}$";
+        return Regex.IsMatch(input, pattern);
+    }
+
+    static void Main()
+    {
+        Console.Write("Enter your Prond: ");
+        string prond = Console.ReadLine();
+
+        if (IsValidPrond(prond))
+            Console.WriteLine("Valid Prond!");
+        else
+            Console.WriteLine("Invalid Prond format.");
+    }
+}
