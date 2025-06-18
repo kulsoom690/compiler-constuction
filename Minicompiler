@@ -1,0 +1,1176 @@
+using System;
+using System.Collections.Generic;
+using System.Text.RegularExpressions;
+
+namespace MiniCompiler
+{
+    class Compiler
+    {
+       
+
+        private string sourceCode = "";
+        private List<(string Token, string Type)> tokens = new();
+        public static List<Symbol> SymbolTable = new List<Symbol>();
+
+        public void InputSourceCode()
+        {
+            Console.WriteLine("📝 Enter your source code (type 'END' on a new line to finish):");
+
+            List<string> lines = new();
+            string line;
+            while ((line = Console.ReadLine()) != null && line.ToUpper() != "END")
+            {
+                lines.Add(line);
+            }
+
+            sourceCode = string.Join("\n", lines);
+        }
+        public void LexicalAnalysis()
+        {
+            Console.WriteLine("\n🔍 Lexical Analysis Running...\n");
+            tokens.Clear();
+
+            string code = RemoveComments(sourceCode);
+
+            var tokenPatterns = new Dictionary<string, string>
+    {
+        { "Keyword",      @"\b(int|float|char|if|else|while|return|for|break|continue|void|print)\b" },
+        { "CharLiteral",  @"'[^']'" },
+        { "Number",       @"\b\d+(\.\d+)?\b" },
+        { "Identifier",   @"\b[a-zA-Z_][a-zA-Z0-9_]*\b" },
+        { "Operator",     @"(>=|<=|==|!=|>|<|=|\+|\-|\*|/)" },
+        { "Symbol",       @"[{}()[\];,]" },
+        { "Whitespace",   @"\s+" }
+    };
+
+            string combinedPattern = string.Join("|", tokenPatterns.Select(kvp => $"(?<{kvp.Key}>{kvp.Value})"));
+
+            var regex = new Regex(combinedPattern, RegexOptions.Compiled);
+            var matches = regex.Matches(code);
+
+            foreach (Match match in matches)
+            {
+                foreach (var key in tokenPatterns.Keys)
+                {
+                    var group = match.Groups[key];
+                    if (group.Success)
+                    {
+                        if (key != "Whitespace") // Skip whitespace
+                        {
+                            tokens.Add((group.Value, key));
+                            Console.WriteLine($"{key,-12}: {group.Value}");
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        private string RemoveComments(string code)
+        {
+            // Remove both single-line and multi-line comments
+            return Regex.Replace(code, @"//.?$|/\.?\/", "",
+                                 RegexOptions.Singleline | RegexOptions.Multiline | RegexOptions.Compiled);
+        }
+
+
+        public void SyntaxAnalysis()
+        {
+            Console.WriteLine("\n📐 Syntax Analysis Running...\n");
+
+            if (tokens.Count == 0)
+            {
+                Console.WriteLine("⚠️ No tokens found. Please run Lexical Analysis first.");
+                return;
+            }
+
+            List<string> syntaxErrors = new();
+            int i = 0;
+
+            while (i < tokens.Count)
+            {
+                var token = tokens[i];
+
+                // Handle print(expression);
+                if (token.Type == "Keyword" && token.Token == "print")
+                {
+                    if (Match(i + 1, "(") &&
+                        Match(i + 2, "Identifier", "Number", "CharLiteral") &&
+                        Match(i + 3, ")") &&
+                        Match(i + 4, ";"))
+                    {
+                        Console.WriteLine($"✅ Valid print statement: print({tokens[i + 2].Token});");
+                        i += 5;
+                    }
+                    else
+                    {
+                        syntaxErrors.Add($"❌ Invalid print statement syntax near 'print'.");
+                        i++;
+                    }
+                    continue;
+                }
+
+                // Handle declaration and initialization
+                else if (token.Type == "Keyword" && (token.Token == "int" || token.Token == "float" || token.Token == "char"))
+                {
+                    if (Match(i + 1, "Identifier"))
+                    {
+                        string name = tokens[i + 1].Token;
+                        if (Match(i + 2, ";"))
+                        {
+                            Console.WriteLine($"✅ Valid declaration: {token.Token} {name};");
+                            i += 3;
+                        }
+                        else if (Match(i + 2, "="))
+                        {
+                            int temp = i + 3;
+                            if (!Match(temp, "Identifier", "Number", "CharLiteral"))
+                            {
+                                syntaxErrors.Add($"❌ Invalid right-hand side in initialization: {token.Token} {name}");
+                                i += 2;
+                                continue;
+                            }
+                            temp++;
+
+                            // Allow expression like a + b or 5 * 2
+                            while (Match(temp, "Operator"))
+                            {
+                                temp++;
+                                if (!Match(temp, "Identifier", "Number", "CharLiteral"))
+                                {
+                                    syntaxErrors.Add($"❌ Invalid expression in initialization: {token.Token} {name}");
+                                    break;
+                                }
+                                temp++;
+                            }
+
+                            if (Match(temp, ";"))
+                            {
+                                Console.WriteLine($"✅ Valid initialization: {token.Token} {name} = [expression];");
+                                i = temp + 1;
+                            }
+                            else
+                            {
+                                syntaxErrors.Add($"❌ Missing ';' in initialization of {name}");
+                                i += 2;
+                            }
+                        }
+
+                        else
+                        {
+                            syntaxErrors.Add($"❌ Invalid declaration or initialization near: {token.Token} {name}");
+                            i += 2;
+                        }
+                    }
+                    else
+                    {
+                        syntaxErrors.Add($"❌ Expected identifier after type '{token.Token}'");
+                        i++;
+                    }
+                    continue;
+                }
+
+                // Handle assignment
+                else if (token.Type == "Identifier" && Match(i + 1, "="))
+                {
+                    int temp = i;
+                    if (IsValidStatement(ref temp))
+                    {
+                        Console.WriteLine($"✅ Valid assignment statement.");
+                        i = temp;
+                    }
+                    else
+                    {
+                        syntaxErrors.Add($"❌ Invalid assignment near: {token.Token}");
+                        i += 2;
+                    }
+                    continue;
+                }
+
+                // Handle if-else
+                else if (token.Type == "Keyword" && token.Token == "if")
+                {
+                    if (Match(i + 1, "(") &&
+                        Match(i + 2, "Identifier") &&
+                        Match(i + 3, "Operator") &&
+                        Match(i + 4, "Identifier", "Number") &&
+                        Match(i + 5, ")") &&
+                        Match(i + 6, "{"))
+                    {
+                        i += 7;
+                        if (!ParseBlock(ref i, syntaxErrors))
+                        {
+                            syntaxErrors.Add("❌ Error in if-block.");
+                            continue;
+                        }
+
+                        if (Match(i, "Keyword") && tokens[i].Token == "else")
+                        {
+                            if (Match(i + 1, "{"))
+                            {
+                                i += 2;
+                                if (!ParseBlock(ref i, syntaxErrors))
+                                {
+                                    syntaxErrors.Add("❌ Error in else-block.");
+                                    continue;
+                                }
+                                Console.WriteLine("✅ Valid if-else block.");
+                            }
+                            else
+                            {
+                                syntaxErrors.Add("❌ Missing '{' after else.");
+                                i++;
+                            }
+                        }
+                        else
+                        {
+                            Console.WriteLine("✅ Valid if-block without else.");
+                        }
+                    }
+                    else
+                    {
+                        syntaxErrors.Add("❌ Invalid if-condition or missing block.");
+                        i++;
+                    }
+                    continue;
+                }
+
+                // Unknown or unhandled tokens
+                else
+                {
+                    syntaxErrors.Add($"❌ Unexpected token: '{token.Token}' of type '{token.Type}' at position {i}");
+                    i++;
+                }
+            }
+
+            if (syntaxErrors.Count > 0)
+            {
+                Console.WriteLine("\n❗ Syntax Errors Found:");
+                foreach (var error in syntaxErrors)
+                {
+                    Console.WriteLine(error);
+                }
+            }
+            else
+            {
+                Console.WriteLine("\n✅ No syntax errors found.");
+            }
+        }
+
+        private bool IsValidStatement(ref int i)
+        {
+            // Handle assignment with expression: a = a * 3;
+            if (Match(i, "Identifier") && Match(i + 1, "="))
+            {
+                int start = i;
+                i += 2;
+
+                if (!Match(i, "Identifier", "Number", "CharLiteral")) return false;
+
+                i++;
+
+                while (Match(i, "Operator"))
+                {
+                    i++;
+                    if (!Match(i, "Identifier", "Number", "CharLiteral"))
+                        return false;
+                    i++;
+                }
+
+                if (!Match(i, ";")) return false;
+
+                i++; // Move past ;
+                return true;
+            }
+
+            // Handle declaration: int a; OR int a = 5;
+            if (Match(i, "Keyword") && (tokens[i].Token == "int" || tokens[i].Token == "float" || tokens[i].Token == "char"))
+            {
+                if (Match(i + 1, "Identifier") && Match(i + 2, ";"))
+                {
+                    i += 3;
+                    return true;
+                }
+                if (Match(i + 1, "Identifier") && Match(i + 2, "=") &&
+                    Match(i + 3, "Identifier", "Number", "CharLiteral") && Match(i + 4, ";"))
+                {
+                    i += 5;
+                    return true;
+                }
+            }
+
+            // Handle print: print(x);
+            if (Match(i, "Keyword") && tokens[i].Token == "print" &&
+                Match(i + 1, "(") &&
+                Match(i + 2, "Identifier", "Number", "CharLiteral") &&
+                Match(i + 3, ")") &&
+                Match(i + 4, ";"))
+            {
+                i += 5;
+                return true;
+            }
+
+            return false;
+        }
+
+
+
+        private bool Match(int index, params string[] expectedTypesOrTokens)
+        {
+            if (index >= tokens.Count) return false;
+            var current = tokens[index];
+            foreach (string expected in expectedTypesOrTokens)
+            {
+                if (expected == current.Type || expected == current.Token)
+                    return true;
+            }
+            return false;
+        }
+        private bool ParseBlock(ref int i, List<string> syntaxErrors)
+        {
+            while (i < tokens.Count && tokens[i].Token != "}")
+            {
+                int start = i;
+                if (!IsValidStatement(ref i))
+                {
+                    syntaxErrors.Add($"❌ Invalid statement inside block near '{tokens[start].Token}' at position {start}");
+                    return false;
+                }
+            }
+
+            if (Match(i, "}"))
+            {
+                i++; // Skip closing brace
+                return true;
+            }
+            else
+            {
+                syntaxErrors.Add("❌ Missing closing brace '}' for block.");
+                return false;
+            }
+        }
+
+        public void SemanticAnalysis()
+        {
+            Console.WriteLine("\n🔎 Semantic Analysis Running...\n");
+
+            // ⬇ Clear out any previous symbols so we start fresh
+            SymbolTable.Clear();
+
+            List<string> semanticErrors = new();
+            HashSet<string> declaredVariables = new();
+            Dictionary<string, string> variableTypes = new();
+
+            int i = 0;
+
+            while (i < tokens.Count)
+            {
+                var current = tokens[i];
+
+                // 1) Handle Declaration of int/float/char
+                if (current.Type == "Keyword"
+                    && (current.Token == "int" || current.Token == "float" || current.Token == "char"))
+                {
+                    string varType = current.Token;
+
+                    if (!IsValidIndex(i + 1))
+                    {
+                        semanticErrors.Add("❌ Declaration error: Expected identifier.");
+                        i++;
+                        continue;
+                    }
+
+                    var identifierToken = tokens[i + 1];
+                    if (identifierToken.Type != "Identifier")
+                    {
+                        semanticErrors.Add("❌ Declaration error: Expected identifier after type.");
+                        i++;
+                        continue;
+                    }
+
+                    string varName = identifierToken.Token;
+                    if (declaredVariables.Contains(varName))
+                    {
+                        semanticErrors.Add($"❌ Semantic Error: Variable '{varName}' is redeclared.");
+                        i += 2;
+                        continue;
+                    }
+
+                    // Mark it as declared
+                    declaredVariables.Add(varName);
+                    variableTypes[varName] = varType;
+
+                    // Default stored value is "null" unless overridden by an initializer
+                    string value = "null";
+
+                    // Move past keyword and identifier
+                    i += 2;
+
+                    // 1a) If there’s an initializer “= <rhs> ”
+                    if (IsValidIndex(i) && tokens[i].Token == "=")
+                    {
+                        i++; // skip the '='
+
+                        if (!IsValidIndex(i))
+                        {
+                            semanticErrors.Add($"❌ Incomplete assignment to variable '{varName}'.");
+                        }
+                        else
+                        {
+                            var rhs = tokens[i];
+
+                            // If RHS is an identifier, check it exists, then assign if type is compatible
+                            if (rhs.Type == "Identifier")
+                            {
+                                if (!declaredVariables.Contains(rhs.Token))
+                                {
+                                    semanticErrors.Add($"❌ Semantic Error: Undeclared variable '{rhs.Token}' used in assignment.");
+                                }
+                                else if (varType == "int" && variableTypes[rhs.Token] == "float")
+                                {
+                                    semanticErrors.Add($"❌ Type Mismatch: Cannot assign float to int variable '{varName}'.");
+                                }
+                                else if (varType == "int" && variableTypes[rhs.Token] == "char")
+                                {
+                                    // optional: if you want to forbid char → int
+                                    semanticErrors.Add($"❌ Type Mismatch: Cannot assign char to int variable '{varName}'.");
+                                }
+                                else
+                                {
+                                    value = rhs.Token;
+                                }
+                            }
+                            // If RHS is a number, check float‐to‐int mismatch
+                            else if (rhs.Type == "Number")
+                            {
+                                if (varType == "int" && rhs.Token.Contains('.'))
+                                {
+                                    semanticErrors.Add($"❌ Type Mismatch: Cannot assign float literal to int variable '{varName}'.");
+                                }
+                                else
+                                {
+                                    value = rhs.Token;
+                                }
+                            }
+                            // If RHS is a char literal, only allowed if varType == "char"
+                            else if (rhs.Type == "CharLiteral")
+                            {
+                                if (varType != "char")
+                                {
+                                    semanticErrors.Add($"❌ Type Mismatch: Cannot assign char literal to {varType} variable '{varName}'.");
+                                }
+                                else
+                                {
+                                    value = rhs.Token; // e.g. "'A'"
+                                }
+                            }
+                            else
+                            {
+                                semanticErrors.Add($"❌ Invalid assignment value to variable '{varName}'.");
+                            }
+
+                            i++; // move past the RHS token
+                        }
+                    }
+
+                    // 1b) Expect semicolon after declaration (with or without initializer)
+                    // 1a) If there’s an initializer “= <rhs> ”
+                    if (IsValidIndex(i) && tokens[i].Token == "=")
+                    {
+                        i++; // skip '='
+
+                        // Process full RHS expression until ;
+                        while (IsValidIndex(i) && tokens[i].Token != ";")
+                        {
+                            var rhs = tokens[i];
+
+                            if (rhs.Type == "Identifier")
+                            {
+                                if (!declaredVariables.Contains(rhs.Token))
+                                {
+                                    semanticErrors.Add($"❌ Semantic Error: Undeclared variable '{rhs.Token}' used in assignment.");
+                                }
+                                else if (varType == "int" && variableTypes[rhs.Token] == "float")
+                                {
+                                    semanticErrors.Add($"❌ Type Mismatch: Cannot assign float to int variable '{varName}'.");
+                                }
+                                else if (varType == "int" && variableTypes[rhs.Token] == "char")
+                                {
+                                    semanticErrors.Add($"❌ Type Mismatch: Cannot assign char to int variable '{varName}'.");
+                                }
+                                else if (varType == "char" && variableTypes[rhs.Token] != "char")
+                                {
+                                    semanticErrors.Add($"❌ Type Mismatch: Cannot assign non-char to char variable '{varName}'.");
+                                }
+                                else
+                                {
+                                    value = rhs.Token;
+                                }
+                            }
+                            else if (rhs.Type == "Number")
+                            {
+                                if (varType == "int" && rhs.Token.Contains('.'))
+                                {
+                                    semanticErrors.Add($"❌ Type Mismatch: Cannot assign float literal to int variable '{varName}'.");
+                                }
+                                else
+                                {
+                                    value = rhs.Token;
+                                }
+                            }
+                            else if (rhs.Type == "CharLiteral")
+                            {
+                                if (varType != "char")
+                                {
+                                    semanticErrors.Add($"❌ Type Mismatch: Cannot assign char literal to {varType} variable '{varName}'.");
+                                }
+                                else
+                                {
+                                    value = rhs.Token;
+                                }
+                            }
+
+                            i++; // move to next token
+                        }
+                    }
+
+
+                    // 1c) NOW that we’ve recorded varName and (possibly its value), add to SymbolTable
+                    SymbolTable.Add(new Symbol(varName, varType, value, "global"));
+
+                    continue;
+                }
+
+                // 2) Handle Assignment to an already‐declared variable
+                else if (current.Type == "Identifier" && IsValidIndex(i + 1) && tokens[i + 1].Token == "=")
+                {
+                    string lhsVar = current.Token;
+
+                    if (!declaredVariables.Contains(lhsVar))
+                    {
+                        semanticErrors.Add($"❌ Semantic Error: Variable '{lhsVar}' used before declaration.");
+                    }
+
+                    string expectedType = variableTypes.ContainsKey(lhsVar) ? variableTypes[lhsVar] : "unknown";
+
+                    int j = i + 2;
+                    string assignedValue = "null";
+
+                    // Scan until we hit a semicolon
+                    while (j < tokens.Count && tokens[j].Token != ";")
+                    {
+                        var tok = tokens[j];
+
+                        if (tok.Type == "Identifier")
+                        {
+                            string rhsVar = tok.Token;
+                            if (!declaredVariables.Contains(rhsVar))
+                            {
+                                semanticErrors.Add($"❌ Semantic Error: Undeclared variable '{rhsVar}' used in assignment.");
+                            }
+                            else if (expectedType == "int" && variableTypes[rhsVar] == "float")
+                            {
+                                semanticErrors.Add($"❌ Type Mismatch: Cannot assign float value '{rhsVar}' to int variable '{lhsVar}'.");
+                            }
+                            else if (expectedType == "int" && variableTypes[rhsVar] == "char")
+                            {
+                                semanticErrors.Add($"❌ Type Mismatch: Cannot assign char value '{rhsVar}' to int variable '{lhsVar}'.");
+                            }
+                            else if (expectedType == "char" && variableTypes[rhsVar] != "char")
+                            {
+                                semanticErrors.Add($"❌ Type Mismatch: Cannot assign non‐char '{rhsVar}' to char variable '{lhsVar}'.");
+                            }
+                            else
+                            {
+                                assignedValue = rhsVar;
+                            }
+                        }
+                        else if (tok.Type == "Number")
+                        {
+                            if (expectedType == "int" && tok.Token.Contains('.'))
+                            {
+                                semanticErrors.Add($"❌ Type Mismatch: Cannot assign float literal '{tok.Token}' to int variable '{lhsVar}'.");
+                            }
+                            else
+                            {
+                                assignedValue = tok.Token;
+                            }
+                        }
+                        else if (tok.Type == "CharLiteral")
+                        {
+                            if (expectedType != "char")
+                            {
+                                semanticErrors.Add($"❌ Type Mismatch: Cannot assign char literal '{tok.Token}' to {expectedType} variable '{lhsVar}'.");
+                            }
+                            else
+                            {
+                                assignedValue = tok.Token;
+                            }
+                        }
+
+                        j++;
+                    }
+
+                    // If we ran out of tokens or didn’t see a semicolon
+                    if (j >= tokens.Count || tokens[j].Token != ";")
+                    {
+                        semanticErrors.Add($"❌ Missing semicolon after assignment to '{lhsVar}'.");
+                        i = j;
+                        continue;
+                    }
+
+                    // 2b) Update that variable’s entry in SymbolTable
+                    var symbol = SymbolTable.FirstOrDefault(s => s.Name == lhsVar);
+                    if (symbol != null)
+                    {
+                        symbol.Value = assignedValue;
+                    }
+
+                    i = j + 1; // skip past the ;
+                    continue;
+                }
+
+                else
+                {
+                    i++;
+                }
+            }
+
+            // 3) Print any semantic errors (or “no errors”)
+            if (semanticErrors.Count > 0)
+            {
+                Console.WriteLine("\n❗ Semantic Errors Found:");
+                foreach (var err in semanticErrors)
+                {
+                    Console.WriteLine(err);
+                }
+            }
+            else
+            {
+                Console.WriteLine("\n✅ No semantic errors found.");
+            }
+
+            // Local helper
+            bool IsValidIndex(int index) => index >= 0 && index < tokens.Count;
+        }
+
+
+        List<string> intermediateCode = new();
+        HashSet<string> declaredVars = new(); // Symbol table simulation (declared variable names)
+
+        public void GenerateIntermediateCode()
+        {
+            Console.WriteLine("\n⚙️ Generating Intermediate Code (TAC)...\n");
+
+            intermediateCode.Clear();
+            int tempVarCount = 1;
+            int labelCount = 1;
+
+            for (int i = 0; i < tokens.Count;)
+            {
+                // Handle: int a = 5; or float b = 3.14;
+                if (tokens[i].Type == "Keyword" && (tokens[i].Token == "int" || tokens[i].Token == "float"))
+                {
+                    if (i + 1 < tokens.Count && tokens[i + 1].Type == "Identifier")
+                    {
+                        string var = tokens[i + 1].Token;
+                        declaredVars.Add(var); // Mark as declared
+
+                        if (i + 2 < tokens.Count && tokens[i + 2].Token == "=")
+                        {
+                            string expr = "";
+                            int j = i + 3;
+                            while (j < tokens.Count && tokens[j].Token != ";")
+                            {
+                                expr += tokens[j].Token + " ";
+                                j++;
+                            }
+
+                            expr = expr.Trim();
+                            string[] parts = expr.Split(' ');
+
+                            if (parts.Length == 1 && IsSafeOperand(parts[0]))
+                            {
+                                intermediateCode.Add($"{var} = {parts[0]}");
+                            }
+                            else if (parts.Length == 3 && parts.All(p => IsSafeOperand(p)))
+                            {
+                                string t1 = $"t{tempVarCount++}";
+                                intermediateCode.Add($"{t1} = {parts[0]} {parts[1]} {parts[2]}");
+                                intermediateCode.Add($"{var} = {t1}");
+                            }
+                            else
+                            {
+                                intermediateCode.Add($"// ⚠️ Invalid or complex expression for '{var}'");
+                            }
+
+                            i = j + 1;
+                        }
+                        else if (i + 2 < tokens.Count && tokens[i + 2].Token == ";")
+                        {
+                            i += 3;
+                        }
+                        else
+                        {
+                            intermediateCode.Add($"// ⚠️ Invalid declaration near '{var}'");
+                            i++;
+                        }
+                    }
+                    else
+                    {
+                        intermediateCode.Add($"// ⚠️ Expected identifier after keyword '{tokens[i].Token}'");
+                        i++;
+                    }
+                }
+
+                // Handle: a = b + c;
+                else if (tokens[i].Type == "Identifier" && i + 2 < tokens.Count && tokens[i + 1].Token == "=")
+                {
+                    string target = tokens[i].Token;
+                    string expr = "";
+                    int j = i + 2;
+
+                    while (j < tokens.Count && tokens[j].Token != ";")
+                    {
+                        expr += tokens[j].Token + " ";
+                        j++;
+                    }
+
+                    expr = expr.Trim();
+                    string[] parts = expr.Split(' ');
+
+                    bool isDeclared = declaredVars.Contains(target);
+                    bool allOperandsDeclared = parts
+                        .Where(p => IsIdentifier(p))
+                        .All(p => declaredVars.Contains(p));
+
+                    if (!isDeclared || !allOperandsDeclared)
+                    {
+                        intermediateCode.Add($"// ❌ Semantic Error: Undeclared variable(s) in assignment to '{target}'");
+                    }
+                    else if (parts.Length == 1)
+                    {
+                        intermediateCode.Add($"{target} = {parts[0]}");
+                    }
+                    else if (parts.Length == 3)
+                    {
+                        string t1 = $"t{tempVarCount++}";
+                        intermediateCode.Add($"{t1} = {parts[0]} {parts[1]} {parts[2]}");
+                        intermediateCode.Add($"{target} = {t1}");
+                    }
+                    else
+                    {
+                        intermediateCode.Add($"// ⚠️ Complex expression for '{target}' not supported yet.");
+                    }
+
+                    i = j + 1;
+                }
+
+                // ✅ Handle: print(x);
+                else if (tokens[i].Token == "print" &&
+                         i + 4 < tokens.Count &&
+                         tokens[i + 1].Token == "(" &&
+                         tokens[i + 2].Type == "Identifier" &&
+                         tokens[i + 3].Token == ")" &&
+                         tokens[i + 4].Token == ";")
+                {
+                    string var = tokens[i + 2].Token;
+
+                    if (declaredVars.Contains(var))
+                    {
+                        intermediateCode.Add($"print {var}");
+                    }
+                    else
+                    {
+                        intermediateCode.Add($"// ❌ Semantic Error: Undeclared variable '{var}' in print");
+                    }
+
+                    i += 5;
+                }
+
+                // Handle: if (a < b) { ... } else { ... }
+                else if (tokens[i].Token == "if" && i + 4 < tokens.Count && tokens[i + 1].Token == "(")
+                {
+                    int condStart = i + 2;
+                    int condEnd = condStart;
+                    while (condEnd < tokens.Count && tokens[condEnd].Token != ")") condEnd++;
+
+                    string condition = "";
+                    for (int k = condStart; k < condEnd; k++)
+                        condition += tokens[k].Token + " ";
+                    condition = condition.Trim();
+
+                    string falseLabel = $"L{labelCount++}";
+                    string endLabel = $"L{labelCount++}";
+
+                    intermediateCode.Add($"ifFalse {condition} goto {falseLabel}");
+
+                    int braceStart = condEnd + 2;
+                    if (braceStart < tokens.Count && tokens[braceStart].Token == "{")
+                    {
+                        i = braceStart + 1;
+                        while (i < tokens.Count && tokens[i].Token != "}")
+                        {
+                            if (tokens[i].Type == "Identifier" && i + 2 < tokens.Count && tokens[i + 1].Token == "=")
+                            {
+                                string lhs = tokens[i].Token;
+                                string rhs = tokens[i + 2].Token;
+                                intermediateCode.Add($"{lhs} = {rhs}");
+                                i += 4;
+                            }
+                            else
+                            {
+                                intermediateCode.Add($"// ⚠️ Unsupported statement inside 'if' block near '{tokens[i].Token}'");
+                                i++;
+                            }
+                        }
+
+                        intermediateCode.Add($"goto {endLabel}");
+                        intermediateCode.Add($"{falseLabel}:");
+
+                        i++; // Skip }
+                        if (i < tokens.Count && tokens[i].Token == "else")
+                        {
+                            if (i + 1 < tokens.Count && tokens[i + 1].Token == "{")
+                            {
+                                i += 2;
+                                while (i < tokens.Count && tokens[i].Token != "}")
+                                {
+                                    if (tokens[i].Type == "Identifier" && i + 2 < tokens.Count && tokens[i + 1].Token == "=")
+                                    {
+                                        string lhs = tokens[i].Token;
+                                        string rhs = tokens[i + 2].Token;
+                                        intermediateCode.Add($"{lhs} = {rhs}");
+                                        i += 4;
+                                    }
+                                    else
+                                    {
+                                        intermediateCode.Add($"// ⚠️ Unsupported statement inside 'else' block near '{tokens[i].Token}'");
+                                        i++;
+                                    }
+                                }
+                                i++; // Skip }
+                            }
+                        }
+
+                        intermediateCode.Add($"{endLabel}:");
+                    }
+                    else
+                    {
+                        intermediateCode.Add("// ❌ Syntax Error: Expected '{' after 'if'");
+                        i++;
+                    }
+                }
+
+                else
+                {
+                    intermediateCode.Add($"// ⚠️ Skipped unrecognized or unsupported line near token '{tokens[i].Token}'");
+                    i++;
+                }
+            }
+
+            Console.WriteLine("📝 Intermediate Code (Three Address Code):\n");
+            foreach (var line in intermediateCode)
+            {
+                Console.WriteLine(line);
+            }
+        }
+
+        // ✅ Helper to check if a token is an identifier
+       private bool IsIdentifier(string token)
+{
+    return !string.IsNullOrEmpty(token) && char.IsLetter(token[0]) && token.All(c => char.IsLetterOrDigit(c) || c == '_');
+}
+
+        // ✅ Helper to validate if token is usable in TAC (identifier or number)
+        private bool IsSafeOperand(string token)
+        {
+            return IsIdentifier(token) || double.TryParse(token, out _);
+        }
+
+
+        public void OptimizeCode()
+        {
+            Console.WriteLine("\n⚙️ Running Code Optimization...\n");
+
+            List<string> optimizedCode = new();
+
+            foreach (var line in intermediateCode)
+            {
+                string trimmed = line.Trim();
+
+                // Skip comments or empty lines
+                if (trimmed.StartsWith("//") || string.IsNullOrWhiteSpace(trimmed))
+                {
+                    optimizedCode.Add(trimmed);
+                    continue;
+                }
+
+                // Constant Folding: t1 = 2 + 3;
+                var matchConstFold = Regex.Match(trimmed, @"(t\d+)\s*=\s*(\d+)\s*([\+\-\/])\s(\d+)");
+                if (matchConstFold.Success)
+                {
+                    string temp = matchConstFold.Groups[1].Value;
+                    int left = int.Parse(matchConstFold.Groups[2].Value);
+                    int right = int.Parse(matchConstFold.Groups[4].Value);
+                    string op = matchConstFold.Groups[3].Value;
+
+                    int result = op switch
+                    {
+                        "+" => left + right,
+                        "-" => left - right,
+                        "*" => left * right,
+                        "/" => right != 0 ? left / right : 0,
+                        _ => 0
+                    };
+
+                    optimizedCode.Add($"{temp} = {result}");
+                    continue;
+                }
+
+                // x = x + 0 OR x = 0 + x → x = x
+                var matchAddZero = Regex.Match(trimmed, @"(\w+)\s*=\s*(\w+)\s*\+\s*0|0\s*\+\s*(\w+)");
+                if (matchAddZero.Success)
+                {
+                    string dest = matchAddZero.Groups[1].Success ? matchAddZero.Groups[1].Value : matchAddZero.Groups[3].Value;
+                    string src = matchAddZero.Groups[2].Success ? matchAddZero.Groups[2].Value : matchAddZero.Groups[3].Value;
+                    optimizedCode.Add($"{dest} = {src}");
+                    continue;
+                }
+
+                // x = x * 1 OR x = 1 * x → x = x
+                var matchMulOne = Regex.Match(trimmed, @"(\w+)\s*=\s*(\w+)\s*\\s*1|1\s\\s(\w+)");
+                if (matchMulOne.Success)
+                {
+                    string dest = matchMulOne.Groups[1].Success ? matchMulOne.Groups[1].Value : matchMulOne.Groups[3].Value;
+                    string src = matchMulOne.Groups[2].Success ? matchMulOne.Groups[2].Value : matchMulOne.Groups[3].Value;
+                    optimizedCode.Add($"{dest} = {src}");
+                    continue;
+                }
+
+                // x = x * 0 OR x = 0 * x → x = 0
+                var matchMulZero = Regex.Match(trimmed, @"(\w+)\s*=\s*(\w+)\s*\\s*0|0\s\\s(\w+)");
+                if (matchMulZero.Success)
+                {
+                    string dest = matchMulZero.Groups[1].Success ? matchMulZero.Groups[1].Value : matchMulZero.Groups[3].Value;
+                    optimizedCode.Add($"{dest} = 0");
+                    continue;
+                }
+
+                // x = x - 0 → x = x
+                var matchSubZero = Regex.Match(trimmed, @"(\w+)\s*=\s*(\w+)\s*-\s*0");
+                if (matchSubZero.Success)
+                {
+                    string dest = matchSubZero.Groups[1].Value;
+                    string src = matchSubZero.Groups[2].Value;
+                    optimizedCode.Add($"{dest} = {src}");
+                    continue;
+                }
+
+                // Default: no optimization
+                optimizedCode.Add(trimmed);
+            }
+
+            Console.WriteLine("🧠 Optimized Code:\n");
+            foreach (var line in optimizedCode)
+            {
+                Console.WriteLine(line);
+            }
+        }
+
+
+        public void GenerateTargetCode()
+        {
+            Console.WriteLine("\n🏁 Generating Target Code (Pseudo-Assembly)...\n");
+
+            if (intermediateCode == null || intermediateCode.Count == 0)
+            {
+                Console.WriteLine("// ⚠️ No intermediate code to generate target code.");
+                return;
+            }
+
+            foreach (var rawLine in intermediateCode)
+            {
+                string line = rawLine.Trim();
+
+                if (string.IsNullOrEmpty(line))
+                    continue;
+
+                // Handle comment or warning lines
+                if (line.StartsWith("//"))
+                {
+                    Console.WriteLine(line);
+                    continue;
+                }
+
+                // Handle print statements: print a
+                if (line.StartsWith("print "))
+                {
+                    string varToPrint = line.Substring(6).Trim();
+                    Console.WriteLine($"PRINT {varToPrint}");
+                    continue;
+                }
+
+                // Match lines like: a = 5  OR  t1 = a + b
+                var assignMatch = Regex.Match(line, @"^(\w+)\s*=\s*(.+)$");
+
+                if (assignMatch.Success)
+                {
+                    string target = assignMatch.Groups[1].Value;
+                    string expr = assignMatch.Groups[2].Value.Trim();
+
+                    // Simple assignment: a = 5 or x = t1
+                    if (!expr.Contains(" "))
+                    {
+                        Console.WriteLine($"MOV {target}, {expr}");
+                    }
+                    else
+                    {
+                        // Expression: t1 = a + b
+                        var parts = expr.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                        if (parts.Length == 3)
+                        {
+                            string src1 = parts[0];
+                            string op = parts[1];
+                            string src2 = parts[2];
+
+                            string instr = op switch
+                            {
+                                "+" => "ADD",
+                                "-" => "SUB",
+                                "*" => "MUL",
+                                "/" => "DIV",
+                                _ => null
+                            };
+
+                            if (instr != null)
+                            {
+                                Console.WriteLine($"MOV R1, {src1}");
+                                Console.WriteLine($"{instr} R1, {src2}");
+                                Console.WriteLine($"MOV {target}, R1");
+                            }
+                            else
+                            {
+                                Console.WriteLine($"// ⚠️ Unsupported operator '{op}' in expression: {line}");
+                            }
+                        }
+                        else
+                        {
+                            Console.WriteLine($"// ⚠️ Complex expression not supported: {line}");
+                        }
+                    }
+                }
+                else
+                {
+                    Console.WriteLine($"// ⚠️ Invalid syntax: {line}");
+                }
+            }
+        }
+
+
+        public class Symbol
+        {
+            public string Name { get; set; }
+            public string Type { get; set; }
+            public string Scope { get; set; } = "global";
+            public string Value { get; set; } = null;
+
+            public Symbol(string name, string type, string value = null, string scope = "global")
+            {
+                Name = name;
+                Type = type;
+                Value = value;
+                Scope = scope;
+            }
+        }
+
+
+        public void ViewSymbolTable()
+        {
+            Console.WriteLine("📋 Symbol Table:");
+            Console.WriteLine("-------------------------------------------------");
+            Console.WriteLine("| Name   | Type   | Scope   | Value             |");
+            Console.WriteLine("-------------------------------------------------");
+
+            if (SymbolTable.Count == 0)
+            {
+                Console.WriteLine("| No symbols declared.                         |");
+            }
+            else
+            {
+                foreach (var symbol in SymbolTable)
+                {
+                    Console.WriteLine($"| {symbol.Name,-7} | {symbol.Type,-6} | {symbol.Scope,-7} | {symbol.Value ?? "null",-17} |");
+                }
+            }
+
+            Console.WriteLine("-------------------------------------------------");
+        }
+
+        public void ShowErrors() => Console.WriteLine("❗ Error Report...");
+    }
+
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            Compiler compiler = new Compiler();
+            bool running = true;
+
+            while (running)
+            {
+                Console.WriteLine("\n=== Mini Compiler Menu ===");
+                Console.WriteLine("1. Input Source Code");
+                Console.WriteLine("2. Run Lexical Analysis");
+                Console.WriteLine("3. Run Syntax Analysis");
+                Console.WriteLine("4. Run Semantic Analysis");
+                Console.WriteLine("5. Generate Intermediate Code");
+                Console.WriteLine("6. Optimize Code");
+                Console.WriteLine("7. Generate Target Code");
+                Console.WriteLine("8. View Symbol Table");
+                Console.WriteLine("9. Show Errors");
+                Console.WriteLine("0. Exit");
+                Console.Write("Select an option: ");
+
+                string choice = Console.ReadLine();
+
+                switch (choice)
+                {
+                    case "1":
+                        compiler.InputSourceCode();
+                        break;
+                    case "2":
+                        compiler.LexicalAnalysis();
+                        break;
+                    case "3":
+                        compiler.SyntaxAnalysis();
+                        break;
+                    case "4":
+                        compiler.SemanticAnalysis();
+                        break;
+                    case "5":
+                        compiler.GenerateIntermediateCode();
+                        break;
+                    case "6":
+                        compiler.OptimizeCode();
+                        break;
+                    case "7":
+                        compiler.GenerateTargetCode();
+                        break;
+                    case "8":
+                        compiler.ViewSymbolTable();
+                        break;
+                    case "9":
+                        compiler.ShowErrors();
+                        break;
+                    case "0":
+                        running = false;
+                        break;
+                    default:
+                        Console.WriteLine("❌ Invalid option. Try again.");
+                        break;
+                }
+            }
+        }
+    }
+}
